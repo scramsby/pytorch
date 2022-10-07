@@ -376,7 +376,7 @@ setup_conda_cudatoolkit_plain_constraint() {
 # Build the proper compiler package before building the final package
 setup_visual_studio_constraint() {
   if [[ "$OSTYPE" == "msys" ]]; then
-      export VSTOOLCHAIN_PACKAGE=vs$VC_YEAR
+      export VSTOOLCHAIN_PACKAGE=vs$VS_YEAR
       conda build $CONDA_CHANNEL_FLAGS --no-anaconda-upload packaging/$VSTOOLCHAIN_PACKAGE
       cp packaging/$VSTOOLCHAIN_PACKAGE/conda_build_config.yaml packaging/torchvision/conda_build_config.yaml
   fi

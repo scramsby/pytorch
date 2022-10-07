@@ -1,10 +1,14 @@
 @echo on
 
-set VC_VERSION_LOWER=16
-set VC_VERSION_UPPER=17
-if "%VC_YEAR%" == "2017" (
+set VC_VERSION_LOWER=17
+set VC_VERSION_UPPER=18
+if "%VS_YEAR%" == "2017" (
     set VC_VERSION_LOWER=15
     set VC_VERSION_UPPER=16
+)
+if "%VS_YEAR%" == "2019" (
+    set VC_VERSION_LOWER=16
+    set VC_VERSION_UPPER=17
 )
 
 for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -legacy -products * -version [%VC_VERSION_LOWER%^,%VC_VERSION_UPPER%^) -property installationPath`) do (
