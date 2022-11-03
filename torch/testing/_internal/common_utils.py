@@ -687,7 +687,7 @@ def run_tests(argv=UNITTEST_ARGS):
     suite = unittest.TestLoader().loadTestsFromModule(__main__)
     if not lint_test_case_extension(suite):
         sys.exit(1)
-    for i in range(100):
+    for i in range(10):
 
         if TEST_IN_SUBPROCESS:
             failed_tests = []
