@@ -362,7 +362,7 @@ TORCH_IMPL_FUNC(index_add_mps_out)(
           MPSGraphTensor* alphaSourceSlice = [mpsGraph multiplicationWithPrimaryTensor:castedSourceTensor
                                                                        secondaryTensor:alphaTensor
                                                                                   name:nil];
-                                                                                                                                 
+
           MPSGraphTensor* outputTensor = [mpsGraph scatterWithDataTensor:castedInputTensor
                                                             updatesTensor:alphaSourceSlice
                                                             indicesTensor:indexTensor
