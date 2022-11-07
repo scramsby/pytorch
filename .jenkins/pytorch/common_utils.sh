@@ -117,6 +117,16 @@ function checkout_install_torchvision() {
   popd
 }
 
+function install_torchaudio_nightly() {
+  NIGHTLY_VERSION="dev20221101"
+  pip_install --user --pre torchaudio==0.14.0.${NIGHTLY_VERSION} --extra-index-url https://download.pytorch.org/whl/nightly/cu117
+}
+
+function install_torchtext_nightly() {
+  NIGHTLY_VERSION="dev20221101"
+  pip_install --user --pre torchtext==0.14.0.${NIGHTLY_VERSION} --extra-index-url https://download.pytorch.org/whl/nightly/cu117
+}
+
 function clone_pytorch_xla() {
   if [[ ! -d ./xla ]]; then
     git clone --recursive --quiet https://github.com/pytorch/xla.git
@@ -199,8 +209,7 @@ function checkout_install_torchbench() {
   git clone https://github.com/pytorch/benchmark torchbench
   pushd torchbench
   git checkout "${commit}"
-  python install.py
-  pip_install gym==0.25.2  # workaround issue in 0.26.0
+  python install.py --continue_on_fail
   popd
 }
 
