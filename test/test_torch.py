@@ -7580,6 +7580,18 @@ tensor([[[1.+1.j, 1.+1.j, 1.+1.j,  ..., 1.+1.j, 1.+1.j, 1.+1.j],
         # storage to a single storage would cause RuntimeError to be thrown
         self.assertRaises(RuntimeError, lambda: torch.zeros(1, 6).expand(5, 6).copy_(torch.zeros(5, 6)))
 
+    def test_copy_from_smaller_src_float16(self):
+        # https://github.com/pytorch/pytorch/issues/88543
+        # fbgemm APIs were used incorrectly in copy_impl. This used to read out
+        # of bounds by accessing src memory (because it has less elements).
+        src = torch.empty((0, 2, 3), dtype=torch.float16)  # 0 elems
+        out = torch.empty(1, dtype=torch.complex64)  # 1 elem
+        # Triggers a copy that used to crash.
+        with self.assertRaisesRegex(
+                RuntimeError,
+                r"output with shape \[1\] doesn't match the broadcast shape \[0, 2, 3\]"):
+            out.real = src
+
     # FIXME: Port to a more appropriate test suite
     def _test_to_with_layout(self, layout):
         def test_copy_behavior(t, non_blocking=False):
