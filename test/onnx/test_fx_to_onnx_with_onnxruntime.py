@@ -23,8 +23,8 @@ class TestFxToOnnxWithOnnxRuntime(onnx_test_common._TestONNXRuntime):
                 super().__init__()
                 self.conv1 = nn.Conv2d(1, 32, 3, 1, bias=False)
                 self.conv2 = nn.Conv2d(32, 64, 3, 1, bias=False)
-                self.fc1 = nn.Linear(9216, 128, bias=False)
-                self.fc2 = nn.Linear(128, 10, bias=False)
+                self.fc1 = nn.Linear(9216, 128, bias=True)
+                self.fc2 = nn.Linear(128, 10, bias=True)
 
             def forward(self, tensor_x: torch.Tensor):
                 tensor_x = self.conv1(tensor_x)
