@@ -1163,6 +1163,73 @@ inline Vectorized<int8_t> Vectorized<int8_t>::le(const Vectorized<int8_t>& other
   return (*this <= other) & Vectorized<int8_t>(1);
 }
 
+template <>
+Vectorized<int64_t> inline operator<<(const Vectorized<int64_t>& a, const Vectorized<int64_t>& b) {
+  return _mm512_sllv_epi64(a, b);
+}
+
+template <>
+Vectorized<int32_t> inline operator<<(const Vectorized<int32_t>& a, const Vectorized<int32_t>& b) {
+  return _mm512_sllv_epi32(a, b);
+}
+
+template <>
+Vectorized<int16_t> inline operator<<(const Vectorized<int16_t>& a, const Vectorized<int16_t>& b) {
+  return _mm512_sllv_epi16(a, b);
+}
+
+template <>
+Vectorized<int8_t> inline operator<<(const Vectorized<int8_t>& a, const Vectorized<int8_t>& b) {
+  // No vector instruction for shifting int8_t, so emulating it instead.
+
+  __m512i ctl;
+
+  // Convert operand values with index%2==0 to 16-bit values, with
+  // higher 8 bits set to 0.  Then, perform shifting, and write result
+  // values as 8-bit values back to the same places where operand
+  // values came from.  Also, make sure that bits for result values
+  // with index%2!=0 are set to 0.
+  ctl = _mm512_set_epi8(0x80, 62, 0x80, 60, 0x80, 58, 0x80, 56,
+                        0x80, 54, 0x80, 52, 0x80, 50, 0x80, 48,
+                        0x80, 46, 0x80, 44, 0x80, 42, 0x80, 40,
+                        0x80, 38, 0x80, 36, 0x80, 34, 0x80, 32,
+                        0x80, 30, 0x80, 28, 0x80, 26, 0x80, 24,
+                        0x80, 22, 0x80, 20, 0x80, 18, 0x80, 16,
+                        0x80, 14, 0x80, 12, 0x80, 10, 0x80, 8,
+                        0x80, 6, 0x80, 4, 0x80, 2, 0x80, 0);
+  __m512i a0 = _mm512_shuffle_epi8(a, ctl);
+  __m512i b0 = _mm512_shuffle_epi8(b, ctl);
+  __m512i c0 = _mm512_sllv_epi16(a0, b0);
+  c0 = _mm512_and_si512(c0, _mm512_set1_epi16(0xFF));
+
+  // Same as above for operands with index%2==1.
+  ctl = _mm512_set_epi8(0x80, 63, 0x80, 61, 0x80, 59, 0x80, 57,
+                        0x80, 55, 0x80, 53, 0x80, 51, 0x80, 49,
+                        0x80, 47, 0x80, 45, 0x80, 43, 0x80, 41,
+                        0x80, 39, 0x80, 37, 0x80, 35, 0x80, 33,
+                        0x80, 31, 0x80, 29, 0x80, 27, 0x80, 25,
+                        0x80, 23, 0x80, 21, 0x80, 19, 0x80, 17,
+                        0x80, 15, 0x80, 13, 0x80, 11, 0x80, 9,
+                        0x80, 7, 0x80, 5, 0x80, 3, 0x80, 1);
+  __m512i a1 = _mm512_shuffle_epi8(a, ctl);
+  __m512i b1 = _mm512_shuffle_epi8(b, ctl);
+  __m512i c1 = _mm512_sllv_epi16(a1, b1);
+  ctl = _mm512_set_epi8(62, 0x80, 60, 0x80, 58, 0x80, 56, 0x80,
+                        54, 0x80, 52, 0x80, 50, 0x80, 48, 0x80,
+                        46, 0x80, 44, 0x80, 42, 0x80, 40, 0x80,
+                        38, 0x80, 36, 0x80, 34, 0x80, 32, 0x80,
+                        30, 0x80, 28, 0x80, 26, 0x80, 24, 0x80,
+                        22, 0x80, 20, 0x80, 18, 0x80, 16, 0x80,
+                        14, 0x80, 12, 0x80, 10, 0x80, 8, 0x80,
+                        6, 0x80, 4, 0x80, 2, 0x80, 0, 0x80);
+  c1 = _mm512_shuffle_epi8(c1, ctl);
+
+  // Merge partial results into the final result.
+  __m512i c = _mm512_or_si512(c0, c1);
+
+  return c;
+}
+
 #endif
 
 }}}
