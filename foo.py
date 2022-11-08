@@ -223,3 +223,107 @@ assert torch.allclose(ggx, torch.tensor(2.))
 
 ggx = grad(grad(to_custom_vjp(MySquare).apply))(x)
 assert torch.allclose(ggx, torch.tensor(2.))
+
+import torch
+import numpy as np
+from torch._custom_function import to_custom_function
+from torch.testing._internal.common_utils import disable_functorch
+
+
+class NumpySin(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        x_np = x.detach().numpy()
+        ctx.x_np = x_np
+        return torch.tensor(np.sin(x_np))
+
+    @staticmethod
+    def backward(ctx, gy):
+        # TODO: this shouldn't be necessary
+        with disable_functorch():
+            gx = gy.numpy() * np.cos(ctx.x_np)
+        return torch.tensor(gx)
+
+    @staticmethod
+    def vmap_rule(ctx, x_batched):
+        x, x_bdim = x_batched
+        x_np = x.numpy()
+        ctx.x_np = x_np
+        return torch.tensor(np.sin(x_np)), x_bdim
+
+
+def numpy_sin(x):
+    out, _ = to_custom_function(NumpySin)(x)
+    return out
+
+
+print('-' * 80)
+x = torch.randn(3)
+y = vmap(numpy_sin)(x)
+assert torch.allclose(y, x.sin())
+
+x = torch.randn([])
+y = grad(numpy_sin)(x)
+assert torch.allclose(y, x.cos())
+
+y = numpy_sin(x)
+assert torch.allclose(y, x.sin())
+
+# expected to fail
+# x = torch.randn([])
+# y = grad(grad(numpy_sin))(x)
+# assert torch.allclose(y, -x.sin())
+
+# The composable autograd.function...
+class BetterNumpySin(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        x_np = x.numpy()
+        ctx.x_np = x_np
+        return torch.tensor(np.sin(x_np)), x_np
+
+    @staticmethod
+    def backward(ctx, gy, _):
+        out, saved = to_custom_function(NumpySinBackward)(gy, ctx.x_np)
+        return out
+
+    @staticmethod
+    def vmap_rule(ctx, bx):
+        x, x_bdim = bx
+        x.movedim(x_bdim, 0)
+        (y, x_np), _ = to_custom_function(BetterNumpySin)(x)
+        ctx.x_np = x_np
+        return (y, 0), (x_np, None)
+
+
+class NumpySinBackward(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, gy, x): 
+        gx = gy.numpy() * np.cos(x)
+        return torch.tensor(gx)
+
+    @staticmethod
+    def backward(ctx, *args):
+        raise RuntimeError("no double backwards support")
+
+    @staticmethod
+    def vmap_rule(ctx, bgy, x):
+        gy, g_bdim = gby
+        return (NumpySinBackward.apply(gy, x), g_bdim)
+
+
+def better_numpy_sin(x):
+    (out, _), _ = to_custom_function(BetterNumpySin)(x)
+    return out
+
+x = torch.randn(2, 3)
+y = vmap(better_numpy_sin)(x)
+assert torch.allclose(y, x.sin())
+
+x = torch.randn(2, 3)
+y = vmap(vmap(better_numpy_sin))(x)
+assert torch.allclose(y, x.sin())
+
+# x = torch.randn(3)
+# y = vmap(grad(better_numpy_sin))(x)
+# assert torch.allclose(y, x.cos())

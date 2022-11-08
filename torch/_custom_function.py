@@ -10,6 +10,7 @@ from torch._C import (
 )
 
 
+
 custom_vjp_call = PyOperator('custom_vjp_call')
 custom_vjp_call.fallthrough(DispatchKey.PythonTLSSnapshot)
 
@@ -174,11 +175,17 @@ class CustomVjp:
 # (1) intermediate tensors are being saved
 # (2) user is computing higher order gradients. e.g. grad(grad(...
 class MockCtx:
+    def __init__(self):
+        self.saved_tensors = []
+        self.saved_values = {}
+
     def save_for_backward(self, *tensors):
         self.saved_tensors = tensors
 
-    def __setitem__(self, key, value):
-        raise RuntimeError("NYI")
+    def __setattr__(self, name, value):
+        if name in ('saved_tensors', 'saved_values'):
+            return super().__setattr__(name, value)
+        self.saved_values[name] = value
 
 def to_custom_vjp(af):
     class Generated(CustomVjp):
@@ -195,3 +202,109 @@ def to_custom_vjp(af):
             return af.backward(ctx, *grads)
 
     return Generated
+
+
+# This is autograd.Function that has a vmap_rule
+custom_function_call = PyOperator('custom_function_call')
+custom_function_call.fallthrough(DispatchKey.PythonTLSSnapshot)
+
+
+# TODO: registering to 'Autograd' doesn't work (alias keys don't work with py_impl)
+@custom_function_call.py_impl(DispatchKey.AutogradCPU)
+def custom_function_call_autograd(f_fwd, f_bwd, f_vmap, *operands):
+    class Generated(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, *operands):
+            unwrapped_operands = operands
+
+            output = f_fwd(*unwrapped_operands)
+            results, saved = output
+            ctx.saved = saved
+
+            return saved, results
+
+        @staticmethod
+        def backward(ctx, _, *grads):
+            saved = ctx.saved
+            result = f_bwd(saved, grads)
+            return result
+
+    saved, out = Generated.apply(*operands)
+    return out, saved
+
+
+@custom_function_call.py_functorch_impl(TransformType.Grad)
+def custom_function_call_grad(interpreter, f_fwd, f_bwd, f_vmap, *operands):
+    maybe_interpreter = interpreter
+    level = maybe_interpreter.level()
+
+    class Generated(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, *operands):
+            unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
+
+            with torch.enable_grad(), maybe_interpreter.lower():
+                output = f_fwd(*unwrapped_operands)
+                results, saved = output
+
+            results, out_spec = pytree.tree_flatten(results)
+            outs, _ = wrap_outs_and_saved(results, [], operands, unwrapped_operands, level)
+            ctx.saved = saved
+
+            return saved, pytree.tree_unflatten(outs, out_spec)
+
+        @staticmethod
+        def backward(ctx, _, *grads):
+            grads = pytree.tree_map(functools.partial(unwrap_grad, level), grads)
+            saved = ctx.saved
+            result = f_bwd(saved, grads)
+            return result
+
+    saved, out = Generated.apply(*operands)
+    return out, saved
+
+
+@custom_function_call.py_functorch_impl(TransformType.Vmap)
+def custom_function_call_vmap(interpreter, f_fwd, f_bwd, f_vmap, *operands):
+    current_level = interpreter.level()
+    unwrapped_operands, in_dims = unwrap_batched(operands)
+    o, spec = pytree.tree_flatten(unwrapped_operands)
+    i, _ = pytree.tree_flatten(in_dims)
+    k = [(oo, ii) for oo, ii in zip(o, i)]
+    operands = pytree.tree_unflatten(k, spec)
+    with interpreter.lower():
+        out, saved_values = f_vmap(*operands)
+
+    if len(out) == 2 and not isinstance(out[1], tuple):
+        # single output
+        return wrap_batched(current_level, out[0], out[1]), saved_values
+
+    outs, outs_bdims = zip(*out)
+    return wrap_batched(current_level, outs, outs_bdims), saved_values
+
+
+class MockCtx2:
+    pass
+
+def to_custom_function(af):
+    def f_fwd(*args):
+        ctx = MockCtx()
+        output = af.forward(ctx, *args)
+        return output, ctx.saved_values
+
+    def f_bwd(saved, grads):
+        ctx = MockCtx2()
+        for k, v in saved.items():
+            setattr(ctx, k, v)
+        return af.backward(ctx, *grads)
+
+    def f_vmap(*args):
+        ctx = MockCtx()
+        output = af.vmap_rule(ctx, *args)
+        return output, ctx.saved_values
+
+    def blah(*args):
+        result = custom_function_call(f_fwd, f_bwd, f_vmap, *args)
+        return result
+
+    return blah
