@@ -17792,6 +17792,11 @@ python_ref_db = [
         ),
     ),
     PythonRefInfo(
+        "_refs.as_strided_scatter",
+        torch_opinfo_name="as_strided_scatter",
+        supports_nvfuser=False,
+    ),
+    PythonRefInfo(
         "_refs.broadcast_shapes",
         torch_opinfo_name="broadcast_shapes",
         supports_nvfuser=False,
