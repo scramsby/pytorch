@@ -1182,47 +1182,56 @@ template <>
 Vectorized<int8_t> inline operator<<(const Vectorized<int8_t>& a, const Vectorized<int8_t>& b) {
   // No vector instruction for shifting int8_t, so emulating it instead.
 
-  __m512i ctl;
+  // Control masks for shuffle operation, treating 512 bits as an
+  // array of 8-bit elements, and considering pairs of neighboring
+  // elements.  Specifially, a mask named "ctl_M_N" (M,N in [0,1], and
+  // M!=N) is set so that shuffle will move element with index M from
+  // input pair into element with index N in output pair, and element
+  // with index M in output pair will be set to all 0s.
+  __m512i ctl_0_1 = _mm512_set_epi8(62, 0x80, 60, 0x80, 58, 0x80, 56, 0x80,
+                                    54, 0x80, 52, 0x80, 50, 0x80, 48, 0x80,
+                                    46, 0x80, 44, 0x80, 42, 0x80, 40, 0x80,
+                                    38, 0x80, 36, 0x80, 34, 0x80, 32, 0x80,
+                                    30, 0x80, 28, 0x80, 26, 0x80, 24, 0x80,
+                                    22, 0x80, 20, 0x80, 18, 0x80, 16, 0x80,
+                                    14, 0x80, 12, 0x80, 10, 0x80, 8, 0x80,
+                                    6, 0x80, 4, 0x80, 2, 0x80, 0, 0x80);
+  __m512i ctl_1_0 = _mm512_set_epi8(0x80, 63, 0x80, 61, 0x80, 59, 0x80, 57,
+                                    0x80, 55, 0x80, 53, 0x80, 51, 0x80, 49,
+                                    0x80, 47, 0x80, 45, 0x80, 43, 0x80, 41,
+                                    0x80, 39, 0x80, 37, 0x80, 35, 0x80, 33,
+                                    0x80, 31, 0x80, 29, 0x80, 27, 0x80, 25,
+                                    0x80, 23, 0x80, 21, 0x80, 19, 0x80, 17,
+                                    0x80, 15, 0x80, 13, 0x80, 11, 0x80, 9,
+                                    0x80, 7, 0x80, 5, 0x80, 3, 0x80, 1);
 
-  // Convert operand values with index%2==0 to 16-bit values, with
-  // higher 8 bits set to 0.  Then, perform shifting, and write result
-  // values as 8-bit values back to the same places where operand
-  // values came from.  Also, make sure that bits for result values
-  // with index%2!=0 are set to 0.
-  ctl = _mm512_set_epi8(0x80, 62, 0x80, 60, 0x80, 58, 0x80, 56,
-                        0x80, 54, 0x80, 52, 0x80, 50, 0x80, 48,
-                        0x80, 46, 0x80, 44, 0x80, 42, 0x80, 40,
-                        0x80, 38, 0x80, 36, 0x80, 34, 0x80, 32,
-                        0x80, 30, 0x80, 28, 0x80, 26, 0x80, 24,
-                        0x80, 22, 0x80, 20, 0x80, 18, 0x80, 16,
-                        0x80, 14, 0x80, 12, 0x80, 10, 0x80, 8,
-                        0x80, 6, 0x80, 4, 0x80, 2, 0x80, 0);
-  __m512i a0 = _mm512_shuffle_epi8(a, ctl);
-  __m512i b0 = _mm512_shuffle_epi8(b, ctl);
+  // Masks for bitwise and operation, treating 512 bits as an array of
+  // 8-bit elements, and considering them in pairs of neighboring
+  // elements.  A mask named "keep_M" (M in [0,1]) is set so that
+  // bitwise and will copy element with index M from input pair into
+  // element with the same index in output pair, while the other
+  // element in output pair will be set to all 0s.
+  __m512i keep_0 = _mm512_set1_epi16(0xFF);
+  __m512i keep_1 = _mm512_set1_epi16(0xFF00);
+
+  // Take each 8-bit element with idx%2==0 from input array to be
+  // shifted and extend it to 16 bits so that 0s are added to the
+  // right.  Then, perform shifting on this 16-bit number number.
+  // Upper 8 bits will be proper result of shifting original 8-bit
+  // number, so write them to result array, into the same position
+  // from which corresponding input element is taken.  Also, make sure
+  // that result array elements with idx%2!=0 are set to all 0s.
+  __m512i a0 = _mm512_shuffle_epi8(a, ctl_0_1);
+  __m512i b0 = _mm512_and_si512(b, keep_0);
   __m512i c0 = _mm512_sllv_epi16(a0, b0);
-  c0 = _mm512_and_si512(c0, _mm512_set1_epi16(0xFF));
+  c0 = _mm512_shuffle_epi8(c0, ctl_1_0);
 
-  // Same as above for operands with index%2==1.
-  ctl = _mm512_set_epi8(0x80, 63, 0x80, 61, 0x80, 59, 0x80, 57,
-                        0x80, 55, 0x80, 53, 0x80, 51, 0x80, 49,
-                        0x80, 47, 0x80, 45, 0x80, 43, 0x80, 41,
-                        0x80, 39, 0x80, 37, 0x80, 35, 0x80, 33,
-                        0x80, 31, 0x80, 29, 0x80, 27, 0x80, 25,
-                        0x80, 23, 0x80, 21, 0x80, 19, 0x80, 17,
-                        0x80, 15, 0x80, 13, 0x80, 11, 0x80, 9,
-                        0x80, 7, 0x80, 5, 0x80, 3, 0x80, 1);
-  __m512i a1 = _mm512_shuffle_epi8(a, ctl);
-  __m512i b1 = _mm512_shuffle_epi8(b, ctl);
+  // Peform shifting the same way for input array elements with
+  // idx%2==1.
+  __m512i a1 = _mm512_and_si512(a, keep_1);
+  __m512i b1 = _mm512_shuffle_epi8(b, ctl_1_0);
   __m512i c1 = _mm512_sllv_epi16(a1, b1);
-  ctl = _mm512_set_epi8(62, 0x80, 60, 0x80, 58, 0x80, 56, 0x80,
-                        54, 0x80, 52, 0x80, 50, 0x80, 48, 0x80,
-                        46, 0x80, 44, 0x80, 42, 0x80, 40, 0x80,
-                        38, 0x80, 36, 0x80, 34, 0x80, 32, 0x80,
-                        30, 0x80, 28, 0x80, 26, 0x80, 24, 0x80,
-                        22, 0x80, 20, 0x80, 18, 0x80, 16, 0x80,
-                        14, 0x80, 12, 0x80, 10, 0x80, 8, 0x80,
-                        6, 0x80, 4, 0x80, 2, 0x80, 0, 0x80);
-  c1 = _mm512_shuffle_epi8(c1, ctl);
+  c1 = _mm512_and_si512(c1, keep_1);
 
   // Merge partial results into the final result.
   __m512i c = _mm512_or_si512(c0, c1);
