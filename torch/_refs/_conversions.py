@@ -1,6 +1,12 @@
 import torch
+import torch._prims_common as utils
 
-from torch._prims_common import TensorLikeType
+# Utilities should come BEFORE this import
+from torch._decomp import register_decomposition
+
+from torch._prims_common import check, TensorLikeType
+from torch._prims_common.wrappers import out_wrapper
+from torch._refs import _broadcast_shapes
 
 # Data conversion references.
 #
@@ -10,6 +16,7 @@ from torch._prims_common import TensorLikeType
 # (like int).
 
 __all__ = [
+    # dtypes
     "bfloat16",
     "bool",
     "byte",
@@ -23,6 +30,8 @@ __all__ = [
     "int",
     "long",
     "short",
+    # misc
+    "complex",
 ]
 
 
@@ -61,3 +70,48 @@ int = _make_conversion_method("int", torch.int)
 long = _make_conversion_method("long", torch.long)
 
 short = _make_conversion_method("short", torch.short)
+
+
+@register_decomposition(torch.ops.aten.complex)
+# Note: complex has type promotion tests disabled due to different semantics.
+# exact_dtype is for compat with complex_check_dtype from core.
+@out_wrapper(exact_dtype=True)
+def complex(real: TensorLikeType, imag: TensorLikeType) -> TensorLikeType:
+    def _allowed_dtypes():
+        return {torch.float32, torch.float64, torch.float16}
+
+    check(
+        real.dtype in _allowed_dtypes() and imag.dtype in _allowed_dtypes(),
+        lambda: (
+            f"Expected both inputs to be Half, Float or Double tensors but got "
+            f"{real.dtype} and {imag.dtype}"
+        ),
+    )
+    check(
+        real.dtype == imag.dtype,
+        lambda: (
+            f"Expected object of scalar type {real.dtype} but got "
+            f"scalar type {imag.dtype} for second argument"
+        ),
+    )
+    result_dtype = utils.corresponding_complex_dtype(real.dtype)  # type: ignore[arg-type]
+    common_shape = _broadcast_shapes(real.shape, imag.shape)
+    memory_format = utils.suggest_memory_format(real)
+    # Note: cannot use torch.empty here because this results in non-FakeTensor
+    # inputs being used in FakeTensorMode, which is not yet supported.
+    result = (
+        torch.empty_like(
+            real,
+            dtype=result_dtype,
+            layout=real.layout,
+            device=real.device,
+            # pin_memory=real.is_pinned(),  # NYI
+            requires_grad=real.requires_grad,
+            memory_format=memory_format,
+        )
+        .expand(common_shape)
+        .clone()
+    )
+    result.real = real
+    result.imag = imag
+    return result
