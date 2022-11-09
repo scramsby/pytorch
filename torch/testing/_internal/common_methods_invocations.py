@@ -1372,6 +1372,13 @@ def sample_inputs_empty(op, device, dtype, requires_grad, **kwargs):
     for case in cases:
         yield SampleInput(case, device=device, dtype=dtype, requires_grad=requires_grad)
 
+def sample_inputs_scalar_tensor(op, device, dtype, requires_grad, **kwargs):
+    vals = (-5, 0, 1, torch.tensor(2, device=device))
+
+    for item in vals:
+        _kwargs = {'device': device, 'dtype': dtype, 'requires_grad': requires_grad}
+        yield SampleInput(item, args=(), kwargs=_kwargs)
+
 def sample_inputs_eye(op, device, dtype, requires_grad, **kwargs):
     # only ints >= 0 are allowed for both arguments, unless m is omitted
     sizes = (None, 0, 1, 2, 3, 4, 7, L, M, S)
@@ -9310,9 +9317,6 @@ op_db: List[OpInfo] = [
            error_inputs_func=error_inputs_diag),
     OpInfo('diag_embed',
            dtypes=all_types_and_complex_and(torch.bool, torch.bfloat16, torch.float16, torch.chalf),
-           # TODO: this is very questionable, because we do have
-           # diag_embed.out but it's not bound to Python somehow
-           # https://github.com/pytorch/pytorch/issues/88598
            supports_out=False,
            # Runs very slowly on slow gradcheck - alternatively reduce input sizes
            gradcheck_fast_mode=True,
@@ -10569,6 +10573,9 @@ op_db: List[OpInfo] = [
            assert_jit_shape_analysis=True,
            sample_inputs_func=sample_inputs_native_batch_norm,
            skips=(
+               # NotImplementedError: Could not run
+               # 'aten::native_batch_norm.out' with arguments from the 'CPU' backend.
+               DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_out', device_type="cpu"),
                DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_out_warning', device_type="cpu"),
                # RuntimeError: out_invstd.dim() == 1 && out_invstd.is_contiguous() && out_invstd.sizes()[0]
                DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_out', device_type="cuda"),
@@ -14536,6 +14543,37 @@ op_db: List[OpInfo] = [
                DecorateInfo(unittest.skip("Skipped!"), 'TestMathBits', 'test_neg_view'),
                # UserWarning not triggered : Resized a non-empty tensor but did not warn about it.
                DecorateInfo(unittest.expectedFailure, 'TestCommon', 'test_out_warning'),
+           )),
+    OpInfo('scalar_tensor',
+           dtypes=all_types_and_complex_and(torch.bool, torch.half, torch.bfloat16, torch.chalf),
+           sample_inputs_func=sample_inputs_scalar_tensor,
+           supports_autograd=False,
+           supports_out=False,
+           skips=(
+               DecorateInfo(unittest.expectedFailure, 'TestNormalizeOperators', 'test_normalize_operator_exhaustive'),
+               # fails to match any schemas despite working in the interpreter
+               DecorateInfo(unittest.expectedFailure, 'TestOperatorSignatures', 'test_get_torch_func_signature_exhaustive'),
+               # fails to match any schemas despite working in the interpreter
+               DecorateInfo(unittest.expectedFailure, 'TestJit', 'test_variant_consistency_jit'),
+               # skip these tests since we have non tensor input
+               DecorateInfo(unittest.skip('Skipped!'), "TestCommon", "test_noncontiguous_samples"),
+               DecorateInfo(unittest.skip('Skipped!'), 'TestCommon', 'test_variant_consistency_eager'),
+               DecorateInfo(unittest.skip("Skipped!"), 'TestMathBits', 'test_conj_view'),
+               DecorateInfo(unittest.skip("Skipped!"), 'TestMathBits', 'test_neg_conj_view'),
+               DecorateInfo(unittest.skip("Skipped!"), 'TestMathBits', 'test_neg_view'),
+               # RuntimeError: It appears that you're trying to get value out of a tracing tensor with
+               # aten._local_scalar_dense.default - erroring out! It's likely that this is caused by
+               # data-dependent control flow or similar.
+               DecorateInfo(unittest.skip("Skipped!"), 'TestProxyTensorOpInfo', 'test_make_fx_exhaustive'),
+               DecorateInfo(unittest.skip("Skipped!"), 'TestProxyTensorOpInfo', 'test_make_fx_fake_exhaustive'),
+               # Issue: https://github.com/pytorch/pytorch/issues/88738
+               DecorateInfo(unittest.skip("Skipped!"), 'TestProxyTensorOpInfo', 'test_make_fx_symbolic_exhaustive'),
+               # AssertionError: Booleans mismatch: True is not False
+               # torch._subclasses.fake_tensor.DataDependentOutputException: aten._local_scalar_dense.default
+               DecorateInfo(unittest.skip("Skipped!"), 'TestFakeTensor', 'test_fake'),
+               DecorateInfo(unittest.skip("Skipped!"), 'TestFakeTensor', 'test_fake_autocast'),
+               # Pre-existing condition (calls .item); needs to be fixed
+               DecorateInfo(unittest.expectedFailure, 'TestCompositeCompliance', 'test_operator'),
            )),
     OpInfo('new_full',
            op=lambda x, *args, **kwargs: x.new_full(*args, **kwargs),
