@@ -278,12 +278,14 @@ assert torch.allclose(y, x.sin())
 class BetterNumpySin(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x):
+        print("forward")
         x_np = x.numpy()
         ctx.x_np = x_np
         return torch.tensor(np.sin(x_np)), x_np
 
     @staticmethod
     def backward(ctx, gy, _):
+        print("backward")
         out, saved = to_custom_function(NumpySinBackward)(gy, ctx.x_np)
         return out
 
@@ -323,6 +325,12 @@ assert torch.allclose(y, x.sin())
 x = torch.randn(2, 3)
 y = vmap(vmap(better_numpy_sin))(x)
 assert torch.allclose(y, x.sin())
+
+# doesn't work due to the conversion problem
+# print('*' * 80)
+# x = torch.randn([])
+# y = grad(better_numpy_sin)(x)
+# assert torch.allclose(y, x.cos())
 
 # x = torch.randn(3)
 # y = vmap(grad(better_numpy_sin))(x)

@@ -232,29 +232,45 @@ def custom_function_call_autograd(f_fwd, f_bwd, f_vmap, *operands):
     saved, out = Generated.apply(*operands)
     return out, saved
 
+# autograd.Function translation:
+# custom_function(f_fwd, f_bwd, f_vmap, *operands) -> Output
+#
+# Output object:
+# - outputs
+# - saved_tensors
+# - saved_values (non-tensors)
+# flatten()
+# unflatten()
+#
+# asdf
+
 
 @custom_function_call.py_functorch_impl(TransformType.Grad)
 def custom_function_call_grad(interpreter, f_fwd, f_bwd, f_vmap, *operands):
+    print(f'grad {interpreter.level()}')
     maybe_interpreter = interpreter
     level = maybe_interpreter.level()
 
     class Generated(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *operands):
+            print("generated forward")
             unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
 
             with torch.enable_grad(), maybe_interpreter.lower():
-                output = f_fwd(*unwrapped_operands)
+                output = custom_function_call(f_fwd, f_bwd, f_vmap, *unwrapped_operands)
                 results, saved = output
 
             results, out_spec = pytree.tree_flatten(results)
             outs, _ = wrap_outs_and_saved(results, [], operands, unwrapped_operands, level)
             ctx.saved = saved
 
+            # TODO: needs to return flat tensors
             return saved, pytree.tree_unflatten(outs, out_spec)
 
         @staticmethod
         def backward(ctx, _, *grads):
+            print("generated backward")
             grads = pytree.tree_map(functools.partial(unwrap_grad, level), grads)
             saved = ctx.saved
             result = f_bwd(saved, grads)
@@ -266,6 +282,7 @@ def custom_function_call_grad(interpreter, f_fwd, f_bwd, f_vmap, *operands):
 
 @custom_function_call.py_functorch_impl(TransformType.Vmap)
 def custom_function_call_vmap(interpreter, f_fwd, f_bwd, f_vmap, *operands):
+    print(f'vmap {interpreter.level()}')
     current_level = interpreter.level()
     unwrapped_operands, in_dims = unwrap_batched(operands)
     o, spec = pytree.tree_flatten(unwrapped_operands)
