@@ -253,8 +253,8 @@ class NumpySin(torch.autograd.Function):
 
 
 def numpy_sin(x):
-    out, _ = to_custom_function(NumpySin)(x)
-    return out
+    output_and_ctx = to_custom_function(NumpySin)(x)
+    return output_and_ctx.output
 
 
 print('-' * 80)
@@ -286,22 +286,25 @@ class BetterNumpySin(torch.autograd.Function):
     @staticmethod
     def backward(ctx, gy, _):
         print("backward")
-        out, saved = to_custom_function(NumpySinBackward)(gy, ctx.x_np)
-        return out
+        output_and_ctx = to_custom_function(NumpySinBackward)(gy, ctx.x_np)
+        return output_and_ctx.output
 
     @staticmethod
     def vmap_rule(ctx, bx):
         x, x_bdim = bx
         x.movedim(x_bdim, 0)
-        (y, x_np), _ = to_custom_function(BetterNumpySin)(x)
+
+        output_and_ctx = to_custom_function(BetterNumpySin)(x)
+        y, x_np = output_and_ctx.output
+
         ctx.x_np = x_np
         return (y, 0), (x_np, None)
 
 
 class NumpySinBackward(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, gy, x): 
-        gx = gy.numpy() * np.cos(x)
+    def forward(ctx, gy, x_np): 
+        gx = gy.numpy() * np.cos(x_np)
         return torch.tensor(gx)
 
     @staticmethod
@@ -309,14 +312,16 @@ class NumpySinBackward(torch.autograd.Function):
         raise RuntimeError("no double backwards support")
 
     @staticmethod
-    def vmap_rule(ctx, bgy, x):
-        gy, g_bdim = gby
-        return (NumpySinBackward.apply(gy, x), g_bdim)
+    def vmap_rule(ctx, bgy, b_x_np):
+        gy, g_bdim = bgy
+        x_np, _ = b_x_np  # TODO: passing convention
+        return (NumpySinBackward.apply(gy, x_np), g_bdim)
 
 
 def better_numpy_sin(x):
-    (out, _), _ = to_custom_function(BetterNumpySin)(x)
-    return out
+    output_and_ctx = to_custom_function(BetterNumpySin)(x)
+    y, x_np = output_and_ctx.output
+    return y
 
 x = torch.randn(2, 3)
 y = vmap(better_numpy_sin)(x)
@@ -326,12 +331,11 @@ x = torch.randn(2, 3)
 y = vmap(vmap(better_numpy_sin))(x)
 assert torch.allclose(y, x.sin())
 
-# doesn't work due to the conversion problem
-# print('*' * 80)
-# x = torch.randn([])
-# y = grad(better_numpy_sin)(x)
-# assert torch.allclose(y, x.cos())
+x = torch.randn([])
+y = grad(better_numpy_sin)(x)
+assert torch.allclose(y, x.cos())
 
-# x = torch.randn(3)
-# y = vmap(grad(better_numpy_sin))(x)
-# assert torch.allclose(y, x.cos())
+print('*' * 80)
+x = torch.randn(3)
+y = vmap(grad(better_numpy_sin))(x)
+assert torch.allclose(y, x.cos())

@@ -209,29 +209,6 @@ custom_function_call = PyOperator('custom_function_call')
 custom_function_call.fallthrough(DispatchKey.PythonTLSSnapshot)
 
 
-# TODO: registering to 'Autograd' doesn't work (alias keys don't work with py_impl)
-@custom_function_call.py_impl(DispatchKey.AutogradCPU)
-def custom_function_call_autograd(f_fwd, f_bwd, f_vmap, *operands):
-    class Generated(torch.autograd.Function):
-        @staticmethod
-        def forward(ctx, *operands):
-            unwrapped_operands = operands
-
-            output = f_fwd(*unwrapped_operands)
-            results, saved = output
-            ctx.saved = saved
-
-            return saved, results
-
-        @staticmethod
-        def backward(ctx, _, *grads):
-            saved = ctx.saved
-            result = f_bwd(saved, grads)
-            return result
-
-    saved, out = Generated.apply(*operands)
-    return out, saved
-
 # autograd.Function translation:
 # custom_function(f_fwd, f_bwd, f_vmap, *operands) -> Output
 #
@@ -243,6 +220,62 @@ def custom_function_call_autograd(f_fwd, f_bwd, f_vmap, *operands):
 # unflatten()
 #
 # asdf
+
+def pyreturn_flatten(output):
+    if isinstance(output, tuple):
+        return list(output), len(output)
+    return [output], None
+
+
+def pyreturn_unflatten(spec, output):
+    if spec is None:
+        assert len(output) == 1
+        return output[0]
+    assert spec == len(output)
+    return tuple(output)
+
+
+class OutputAndCtx:
+    def __init__(self, output, saved_tensors, saved_values):
+        self.output = output
+        self.saved_tensors = saved_tensors
+        self.saved_values = saved_values
+
+    def flatten(self):
+        flat_output, output_spec = pyreturn_flatten(self.output)
+        result = [output_spec, self.saved_tensors, self.saved_values] + flat_output
+        return tuple(result)
+
+    @staticmethod
+    def unflatten(flattened_list):
+        output_spec, saved_tensors, saved_values, *remainder = flattened_list
+        output = pyreturn_unflatten(output_spec, remainder)
+        return OutputAndCtx(output, saved_tensors, saved_values)
+
+    @staticmethod
+    def get_relevant_grads(output_spec, grads):
+        assert isinstance(grad, tuple)
+        return grads[3:]
+
+
+# TODO: registering to 'Autograd' doesn't work (alias keys don't work with py_impl)
+@custom_function_call.py_impl(DispatchKey.AutogradCPU)
+def custom_function_call_autograd(f_fwd, f_bwd, f_vmap, *operands):
+    class Generated(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, *operands):
+            output_and_ctx = f_fwd(*operands)
+            ctx.save_for_backward(*output_and_ctx.saved_tensors)
+            ctx.saved_values = output_and_ctx.saved_values
+            return output_and_ctx.flatten()
+
+        @staticmethod
+        def backward(ctx, _0, _1, _2, *grads):
+            result = f_bwd(ctx.saved_tensors, ctx.saved_values, grads)
+            return result
+
+    flat_out = Generated.apply(*operands)
+    return OutputAndCtx.unflatten(flat_out)
 
 
 @custom_function_call.py_functorch_impl(TransformType.Grad)
@@ -258,26 +291,30 @@ def custom_function_call_grad(interpreter, f_fwd, f_bwd, f_vmap, *operands):
             unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
 
             with torch.enable_grad(), maybe_interpreter.lower():
-                output = custom_function_call(f_fwd, f_bwd, f_vmap, *unwrapped_operands)
-                results, saved = output
+                output_and_ctx = custom_function_call(f_fwd, f_bwd, f_vmap, *unwrapped_operands)
 
-            results, out_spec = pytree.tree_flatten(results)
-            outs, _ = wrap_outs_and_saved(results, [], operands, unwrapped_operands, level)
-            ctx.saved = saved
+            flat_output, output_spec = pyreturn_flatten(output_and_ctx.output)
+            flat_output, saved_tensors = wrap_outs_and_saved(
+                flat_output, output_and_ctx.saved_tensors,
+                operands, unwrapped_operands, level)
 
-            # TODO: needs to return flat tensors
-            return saved, pytree.tree_unflatten(outs, out_spec)
+            ctx.save_for_backward(*saved_tensors)
+            ctx.saved_values = output_and_ctx.saved_values
 
-        @staticmethod
-        def backward(ctx, _, *grads):
-            print("generated backward")
-            grads = pytree.tree_map(functools.partial(unwrap_grad, level), grads)
-            saved = ctx.saved
-            result = f_bwd(saved, grads)
+            output_and_ctx.output = pyreturn_unflatten(output_spec, flat_output)
+            output_and_ctx.saved_tensors = saved_tensors
+            result = output_and_ctx.flatten()
             return result
 
-    saved, out = Generated.apply(*operands)
-    return out, saved
+        @staticmethod
+        def backward(ctx, _0, _1, _2, *grads):
+            print("generated backward")
+            grads = pytree.tree_map(functools.partial(unwrap_grad, level), grads)
+            result = f_bwd(ctx.saved_tensors, ctx.saved_values, grads)
+            return result
+
+    flat_out = Generated.apply(*operands)
+    return OutputAndCtx.unflatten(flat_out)
 
 
 @custom_function_call.py_functorch_impl(TransformType.Vmap)
@@ -289,39 +326,48 @@ def custom_function_call_vmap(interpreter, f_fwd, f_bwd, f_vmap, *operands):
     i, _ = pytree.tree_flatten(in_dims)
     k = [(oo, ii) for oo, ii in zip(o, i)]
     operands = pytree.tree_unflatten(k, spec)
+
     with interpreter.lower():
-        out, saved_values = f_vmap(*operands)
+        output_and_ctx = f_vmap(*operands)
+
+    # TODO: people need to specify bdims for tensors that are saved :/
+    # I don't think this is going to work out
+    out = output_and_ctx.output
+    saved_values = output_and_ctx.saved_values
+    assert len(output_and_ctx.saved_tensors) == 0
 
     if len(out) == 2 and not isinstance(out[1], tuple):
         # single output
-        return wrap_batched(current_level, out[0], out[1]), saved_values
+        return OutputAndCtx(wrap_batched(current_level, out[0], out[1]), [], saved_values)
 
     outs, outs_bdims = zip(*out)
-    return wrap_batched(current_level, outs, outs_bdims), saved_values
+    return OutputAndCtx(wrap_batched(current_level, outs, outs_bdims), [], saved_values)
 
 
 class MockCtx2:
     pass
 
+
 def to_custom_function(af):
     def f_fwd(*args):
         ctx = MockCtx()
         output = af.forward(ctx, *args)
-        return output, ctx.saved_values
+        return OutputAndCtx(output, ctx.saved_tensors, ctx.saved_values)
 
-    def f_bwd(saved, grads):
+    def f_bwd(saved_tensors, saved_values, grads):
         ctx = MockCtx2()
-        for k, v in saved.items():
+        for k, v in saved_values.items():
             setattr(ctx, k, v)
+        ctx.saved_tensors = saved_tensors
         return af.backward(ctx, *grads)
 
     def f_vmap(*args):
         ctx = MockCtx()
         output = af.vmap_rule(ctx, *args)
-        return output, ctx.saved_values
+        return OutputAndCtx(output, ctx.saved_tensors, ctx.saved_values)
 
     def blah(*args):
-        result = custom_function_call(f_fwd, f_bwd, f_vmap, *args)
-        return result
+        output_and_ctx = custom_function_call(f_fwd, f_bwd, f_vmap, *args)
+        return output_and_ctx
 
     return blah
