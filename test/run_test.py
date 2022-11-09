@@ -120,6 +120,7 @@ TESTS = discover_tests(
         'distributions/test_utils',
     ],
     extra_tests=[
+        "mobile/test_lite_script_type.py",
         "test_cpp_extensions_aot_ninja",
         "test_cpp_extensions_aot_no_ninja",
         "distributed/elastic/timer/api_test",
@@ -273,6 +274,7 @@ RUN_PARALLEL_BLOCKLIST = [
 ] + FSDP_TEST
 
 CI_SERIAL_LIST = [
+    'mobile/test_lite_script_type.py',
     'test_nn',
     'test_fake_tensor',
     'test_cpp_api_parity',
